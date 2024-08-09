@@ -12,7 +12,7 @@ import { Worker, isMainThread, parentPort, workerData } from "node:worker_thread
 const app = express()
 const port = 3000
 
-const connection = new Connection("https://mainnet.helius-rpc.com/?api-key=8b5f554c-f521-4d05-b6a6-eb3071c87768", "confirmed");
+const connection = new Connection("https://api.mainnet-beta.solana.com", "confirmed");
 
 const client = new Client({
   connectionString: process.env.PG_DATABASE_URL,
