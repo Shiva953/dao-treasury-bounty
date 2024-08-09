@@ -179,9 +179,9 @@ async function retryWithBackoff(fn, maxRetries = 5, initialDelay = 1000) {
 }
 
 //example usage
-const programId = new PublicKey('GovER5Lthms3bLBqWub97yVrMmEogzX7xNjdXpPPCVZw');
-const realms = await getRealms(connection, programId);
-getTVL(realms)
+// const programId = new PublicKey('GovER5Lthms3bLBqWub97yVrMmEogzX7xNjdXpPPCVZw');
+// const realms = await getRealms(connection, programId);
+// getTVL(realms)
 
 //exposing the endpoint
 app.get('/tvl/dao/:daoGovernanceId', async (req, res) => {
