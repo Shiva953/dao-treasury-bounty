@@ -4,8 +4,10 @@ import { TOKEN_PROGRAM_ID, TOKEN_2022_PROGRAM_ID } from '@solana/spl-token';
 import express from "express";
 import { setTimeout } from "timers/promises"
 import NodeCache from 'node-cache';
-import { Client } from "pg"
+import pkg from "pg"
 import { Worker, isMainThread, parentPort, workerData } from "node:worker_threads"
+
+const Client = pkg.Client;
 
 // DAO Governance PROGRAM ID -> DAOs, DAO -> Governance Accounts, Each Governance Account -> Treasury Accounts
 
@@ -28,52 +30,9 @@ try{
   timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );`
   );
-} finally{
-  client.release()
+} catch(err){
+  console.log(err)
 }
-
-
-// async function priceInUSDC(mint, amount){
-//   try{
-//     const res = await fetch(`https://price.jup.ag/v6/price?ids=${mint}&vsToken=EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v`)
-//     const data = await res.json();
-//     const price = (data.data[mint]?.price * amount) || 0;
-//     console.log(price)
-//     return price;
-//     }
-//     catch(err){
-//       console.log(err)
-//     }
-// }
-
-// async function getAccountsBalance(wallets){
-//   let total = 0;
-//   for (let wallet of wallets){
-//     const sol_lamports_balance = await connection.getBalance(wallet);
-//     const sol_balance = sol_lamports_balance/1_000_000_000;
-//     const solBalanceinUSD = await priceInUSDC('So11111111111111111111111111111111111111112', sol_balance)
-//     total += solBalanceinUSD;
-//     //fetch token accounts and their balances
-//     const token_accounts_org = await connection.getParsedTokenAccountsByOwner(wallet,{ programId: TOKEN_PROGRAM_ID });
-//     console.log(token_accounts_org)
-//     const token_accounts_2022 = await connection.getParsedTokenAccountsByOwner(wallet,{ programId: TOKEN_2022_PROGRAM_ID });
-
-//     const token_accounts = token_accounts_org.value.concat(token_accounts_2022.value);
-//     console.log(token_accounts)
-
-//     for (const tokenAccount of token_accounts) {
-//       const account = tokenAccount.account;
-//       const mintAddress = account.data.parsed.info.mint;
-//       console.log(mintAddress)
-//       const balance = account.data.parsed.info.tokenAmount.uiAmount;
-//       const USDCamount = await priceInUSDC(mintAddress, balance);
-//       console.log("balance in usdc:", USDCamount)
-//       total+= USDCamount;
-//     }
-//   }
-//   return total;
-
-// }
 
 //caching prices of frequent tokens
 const cache = new NodeCache({ stdTTL: 300 }); // Cache for 5 minutes
@@ -137,6 +96,23 @@ async function getAccountsBalance(wallets) {
 }
 
 const tvlCache = new NodeCache({ stdTTL: 86400 }); 
+
+// async function getTVL(realms){
+//   const cacheKey = `tvl_${realms[0].owner.toBase58()}`;
+//   let cachedTVL = tvlCache.get(cacheKey);
+//   let tvl = 0;
+//   for (const realm of realms){
+//     const gov_accounts = await getAllGovernances(connection, new PublicKey(realm.owner.toBase58()), new PublicKey(realm.pubkey.toBase58()));
+//     const treasury_accounts = await Promise.all(gov_accounts.map(gov => getNativeTreasuryAddress(new PublicKey(realm.owner.toBase58()), gov.pubkey)));
+//     const balance = await getAccountsBalance(treasury_accounts)
+//     tvl+=balance;
+//     console.log("Updated TVL: ", tvl)
+//   }
+//   console.log("Total TVL of all DAO Treasuries: ", tvl);
+//   tvlCache.set(cacheKey, tvl);
+
+//   return tvl;
+// }
 
 async function getTVL(realms) {
   const cacheKey = `tvl_${realms[0].owner.toBase58()}`;
@@ -202,10 +178,10 @@ async function retryWithBackoff(fn, maxRetries = 5, initialDelay = 1000) {
   }
 }
 
-// //example usage
-// const programId = new PublicKey('GovER5Lthms3bLBqWub97yVrMmEogzX7xNjdXpPPCVZw');
-// const realms = await getRealms(connection, programId);
-// getTVL(realms)
+//example usage
+const programId = new PublicKey('GovER5Lthms3bLBqWub97yVrMmEogzX7xNjdXpPPCVZw');
+const realms = await getRealms(connection, programId);
+getTVL(realms)
 
 //exposing the endpoint
 app.get('/tvl/dao/:daoGovernanceId', async (req, res) => {
