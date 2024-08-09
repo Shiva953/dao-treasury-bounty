@@ -1,156 +1,246 @@
-// Create an API endpoint which returns back the total TVL of Realms 
-// i.e. the total value of SOL and SPL tokens kept in the treasury of all the DAOs in USD value. 
-// The data can be fetched and stored as JSON or otherwise (database) and update once a month. 
-// The API can return a static stored data for a month.
-//  The update to the data can be automatic or manual (through running a Node script monthly or otherwise).
-
-import { getRealms } from '@solana/spl-governance';
+import { getAllGovernances, getNativeTreasuryAddress, getRealms } from '@solana/spl-governance';
 import { Connection, PublicKey } from '@solana/web3.js';
-import { promises } from "dns";
+import { TOKEN_PROGRAM_ID, TOKEN_2022_PROGRAM_ID } from '@solana/spl-token';
+import express from "express";
+import { setTimeout } from "timers/promises"
+import NodeCache from 'node-cache';
+import { Client } from "pg"
+import { Worker, isMainThread, parentPort, workerData } from "node:worker_threads"
 
-// SPL-Governnance programID -> DAOs(identified by realm address)[each DAO -> wallets under it, total_balance(realms) = dao_treasury_tvl]
-// figure out a way to find all realms under a dao
+// DAO Governance PROGRAM ID -> DAOs, DAO -> Governance Accounts, Each Governance Account -> Treasury Accounts
 
-const connection = new Connection("https://api.mainnet-beta.solana.com", "confirmed");
-const programId = new PublicKey('GovER5Lthms3bLBqWub97yVrMmEogzX7xNjdXpPPCVZw');
+const app = express()
+const port = 3000
 
-const SHYFT_API_KEY = ""
+const connection = new Connection("https://mainnet.helius-rpc.com/?api-key=8b5f554c-f521-4d05-b6a6-eb3071c87768", "confirmed");
 
-const DAO_accounts = await connection.getProgramAccounts(programId)
-// console.log(DAO_accounts[0]);
+const client = new Client({
+  connectionString: process.env.PG_DATABASE_URL,
+});
 
-const realms = await getRealms(connection, programId);
-const sample_dao_0 = realms.slice(0,10)[0].pubkey;
-console.log(sample_dao_0)
-const sample_dao = new PublicKey("DPiH3H3c7t47BMxqTxLsuPQpEC6Kne8GA9VXbxpnZxFE");
+client.connect();
+try{
+  client.query(
+    `CREATE TABLE IF NOT EXISTS tvl (
+  id SERIAL PRIMARY KEY,
+  daoGovernanceId TEXT NOT NULL,
+  tvl NUMERIC NOT NULL,
+  timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);`
+  );
+} finally{
+  client.release()
+}
 
-//getting dao treasury
-async function fetchGraphQL(query, variables = {}, name = "MyQuery") {
-    const result = await fetch(
-      `https://programs.shyft.to/v0/graphql/?api_key=${SHYFT_API_KEY}`,
-      {
-        method: "POST",
-        body: JSON.stringify({
-          query: query,
-          variables: variables,
-          operationName: name
-        })
-      }
-    );
-  
-    return await result.json();
-  }
-  
-  async function getGovernanceAccountsForDAO(realmAddress) {
-  
-    //realms should be an array
-    const query = `
-    query MyQuery($_in: [String!] = "") {
-    GovER5Lthms3bLBqWub97yVrMmEogzX7xNjdXpPPCVZw_GovernanceV1(
-      where: {realm: {_eq: ${JSON.stringify(realmAddress)}}}
-    ) {
-      pubkey
-    }
-    GovER5Lthms3bLBqWub97yVrMmEogzX7xNjdXpPPCVZw_GovernanceV2(
-      where: {realm: {_eq: ${JSON.stringify(realmAddress)}}}
-    ) {
-      pubkey
-    }
-  }
-  `
-    const { errors, data } = await fetchGraphQL(query);
-  
-    if (errors) {
-      // handle those errors like a pro
-      console.error(errors);
-    }
-  
-    const govAccts = []
-    data.GovER5Lthms3bLBqWub97yVrMmEogzX7xNjdXpPPCVZw_GovernanceV1.forEach((dao) => {
-        govAccts.push(dao?.pubkey)
-    })
-  
-    data.GovER5Lthms3bLBqWub97yVrMmEogzX7xNjdXpPPCVZw_GovernanceV2.forEach((dao) => {
-        govAccts.push(dao?.pubkey)
-    })
-  
-    console.log(govAccts);
-  
-    return govAccts;
-  }
-  
-  function getNativeTreasuryAddress(governanceAccounts) {
-    const programId = new PublicKey("GovER5Lthms3bLBqWub97yVrMmEogzX7xNjdXpPPCVZw")
-    const treasuryAddress = []
-    
-    governanceAccounts.forEach(async (governance) => {
-      const acc = new PublicKey(governance)
-      const [address] = PublicKey.findProgramAddressSync(
-      [Buffer.from('native-treasury'), acc.toBuffer()],
-      programId
-    );
-      const addy = address.toBase58()
-      console.log(addy)
-      treasuryAddress.push(address.toBase58());
-    })
-  
-    return treasuryAddress;
-  }
-  
-  async function fetchTreasuryInfo(wallets) {
-    console.time('portfolio')
-    const promises = []
-    //Once we have the treasury wallets, we can fetch their holdings
-    wallets.map(async (wallet) => {
-      promises.push(getPortfolio(wallet))
-    })
-    
-    return await Promise.all(promises);
-  }
-  
-  async function getPortfolio(wallet) {
-    try {
-      console.log('fetching portfolio for ', wallet)
-      const result = await fetch(
-        `https://api.shyft.to/sol/v1/wallet/get_portfolio?network=mainnet-beta&wallet=${wallet}`,
-        {
-          method: "GET",
-          headers: {
-            "Content-Type": "application/json",
-            "x-api-key": SHYFT_API_KEY
-          },
-        }
-      );
-      const res = await result.json()
-  
-      return res;
-      
-    } catch (err) {
-      console.error(err)
-    }
-  }
-  
-  async function getDaoTreasury(realmAddress) {
-    
-    //Get governance accounts for all realms
-    const governanceAccounts = await   getGovernanceAccountsForDAO(realmAddress);
-  
-    // console.log('gov accounts fetched');
-    const treasuryWallets = await getNativeTreasuryAddress(governanceAccounts);
-    
-    // console.log('treasury wallets: ', treasuryWallets);
-    
-    return await fetchTreasuryInfo(treasuryWallets);
-  }
 
-  const treasury = await getDaoTreasury("By2sVGZXwfQq6rAiAM3rNPJ9iQfb5e2QhnF4YjJ4Bip");
-// const treasury = await getDaoTreasury("BzGL6wbCvBisQ7s1cNQvDGZwDRWwKK6bhrV93RYdetzJ");
-// for (let i=500;i<510;i++){
-//     const dao = realms[i].pubkey;
-//     const treasury = await getDaoTreasury(dao.toString())
-//     console.log(treasury)
+// async function priceInUSDC(mint, amount){
+//   try{
+//     const res = await fetch(`https://price.jup.ag/v6/price?ids=${mint}&vsToken=EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v`)
+//     const data = await res.json();
+//     const price = (data.data[mint]?.price * amount) || 0;
+//     console.log(price)
+//     return price;
+//     }
+//     catch(err){
+//       console.log(err)
+//     }
 // }
-  console.dir(treasury, {depth: null})
-  
+
+// async function getAccountsBalance(wallets){
+//   let total = 0;
+//   for (let wallet of wallets){
+//     const sol_lamports_balance = await connection.getBalance(wallet);
+//     const sol_balance = sol_lamports_balance/1_000_000_000;
+//     const solBalanceinUSD = await priceInUSDC('So11111111111111111111111111111111111111112', sol_balance)
+//     total += solBalanceinUSD;
+//     //fetch token accounts and their balances
+//     const token_accounts_org = await connection.getParsedTokenAccountsByOwner(wallet,{ programId: TOKEN_PROGRAM_ID });
+//     console.log(token_accounts_org)
+//     const token_accounts_2022 = await connection.getParsedTokenAccountsByOwner(wallet,{ programId: TOKEN_2022_PROGRAM_ID });
+
+//     const token_accounts = token_accounts_org.value.concat(token_accounts_2022.value);
+//     console.log(token_accounts)
+
+//     for (const tokenAccount of token_accounts) {
+//       const account = tokenAccount.account;
+//       const mintAddress = account.data.parsed.info.mint;
+//       console.log(mintAddress)
+//       const balance = account.data.parsed.info.tokenAmount.uiAmount;
+//       const USDCamount = await priceInUSDC(mintAddress, balance);
+//       console.log("balance in usdc:", USDCamount)
+//       total+= USDCamount;
+//     }
+//   }
+//   return total;
+
+// }
+
+//caching prices of frequent tokens
+const cache = new NodeCache({ stdTTL: 300 }); // Cache for 5 minutes
+async function priceInUSDC(mint, amount) {
+  const cacheKey = `price_${mint}`;
+  let price = cache.get(cacheKey);
+
+  if (price === undefined) {
+    try {
+      const res = await fetch(`https://price.jup.ag/v6/price?ids=${mint}&vsToken=EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v`);
+      const data = await res.json();
+      price = data.data[mint]?.price || 0;
+      cache.set(cacheKey, price);
+    } catch (err) {
+      console.log(err);
+      return 0;
+    }
+  }
+
+  return price * amount;
+}
+
+async function getAccountsBalance(wallets) {
+  let total = 0;
+
+  for (let wallet of wallets) {
+    const walletKey = wallet.toBase58();
+    let cachedBalance = cache.get(walletKey);
+
+    if (cachedBalance === undefined) {
+      let walletTotal = 0;
+
+      const sol_lamports_balance = await connection.getBalance(wallet);
+      const sol_balance = sol_lamports_balance / 1_000_000_000;
+      const solBalanceinUSD = await priceInUSDC('So11111111111111111111111111111111111111112', sol_balance);
+      walletTotal += solBalanceinUSD;
+
+      const [token_accounts_org, token_accounts_2022] = await Promise.all([
+        connection.getParsedTokenAccountsByOwner(wallet, { programId: TOKEN_PROGRAM_ID }),
+        connection.getParsedTokenAccountsByOwner(wallet, { programId: TOKEN_2022_PROGRAM_ID })
+      ]);
+
+      const token_accounts = token_accounts_org.value.concat(token_accounts_2022.value);
+
+      for (const tokenAccount of token_accounts) {
+        const account = tokenAccount.account;
+        const mintAddress = account.data.parsed.info.mint;
+        const balance = account.data.parsed.info.tokenAmount.uiAmount;
+        const USDCamount = await priceInUSDC(mintAddress, balance);
+        walletTotal += USDCamount;
+      }
+
+      cache.set(walletKey, walletTotal);
+      cachedBalance = walletTotal;
+    }
+
+    total += cachedBalance;
+  }
+
+  return total;
+}
+
+const tvlCache = new NodeCache({ stdTTL: 86400 }); 
+
+async function getTVL(realms) {
+  const cacheKey = `tvl_${realms[0].owner.toBase58()}`;
+  let cachedTVL = tvlCache.get(cacheKey);
+
+  if (cachedTVL !== undefined) {
+    console.log("Returning cached TVL value");
+    return cachedTVL;
+  }
+
+  let tVL = 0;
+  const batchSize = 15;
+  const delayBetweenBatches = 1000;
+
+  //batching requests in sizes of 15
+  for (let i = 0; i < realms.length; i += batchSize) {
+    const realm_batch = realms.slice(i, i + batchSize);
+    console.log(`Processing batch ${Math.floor(i / batchSize) + 1} of ${Math.ceil(realms.length / batchSize)}`);
+
+    const tvlBatch = await Promise.all(realm_batch.map(async (realm) => {
+      return retryWithBackoff(async () => {
+        const gov_accounts = await getAllGovernances(connection, new PublicKey(realm.owner.toBase58()), new PublicKey(realm.pubkey.toBase58()));
+        const treasury_accounts = await Promise.all(gov_accounts.map(gov => getNativeTreasuryAddress(new PublicKey(realm.owner.toBase58()), gov.pubkey)));
+        return getAccountsBalance(treasury_accounts);
+      });
+    }));
+
+    tVL += tvlBatch.reduce((sum, value) => sum + value, 0);
+    console.log("Updated TVL: ", tVL);
+
+
+    if (i + batchSize < realms.length) {
+      await setTimeout(delayBetweenBatches);
+    }
+  }
+
+  console.log("Total TVL of all DAO Treasuries: ", tVL);
+  tvlCache.set(cacheKey, tVL);
+
+  await client.query(
+    `INSERT INTO tvl (daoGovernanceId, tvl, timestamp) VALUES ($1, $2, NOW())`,
+    [realms[0].owner.toBase58(), tVL]
+  );
+  return tVL;
+}
+
+//retrying the request, in case rate limit exceeds
+async function retryWithBackoff(fn, maxRetries = 5, initialDelay = 1000) {
+  let retries = 0;
+  while (retries < maxRetries) {
+      try {
+          return await fn();
+      } catch (error) {
+          if (error.message.includes('429') && retries < maxRetries - 1) {
+              const delay = initialDelay * Math.pow(2, retries);
+              console.log(`Rate limited. Retrying after ${delay}ms...`);
+              await setTimeout(delay);
+              retries++;
+          } else {
+              throw error;
+          }
+      }
+  }
+}
+const programId = new PublicKey('GovER5Lthms3bLBqWub97yVrMmEogzX7xNjdXpPPCVZw');
+const realms = await getRealms(connection, programId);
+getTVL(realms)
+
+//exposing the endpoint
+app.get('/tvl/dao/:daoGovernanceId', async (req, res) => {
+  const daoGovernanceId = req.params.daoGovernanceId;
+  const cacheKey = `tvl_${daoGovernanceId}`;
+
+  const { rows: existingRows } = await client.query(
+    `SELECT value FROM tvl WHERE realm = $1 AND timestamp > NOW() - INTERVAL '6 days' ORDER BY timestamp DESC LIMIT 1`,
+    [daoGovernanceId]
+  );
+
+  try {
+    let tvlAmount = tvlCache.get(cacheKey);
+
+    if (tvlAmount === undefined) {
+      console.log("Calculating TVL...");
+      const realms = await getRealms(connection, new PublicKey(daoGovernanceId));
+      tvlAmount = await getTVL(realms);
+      tvlCache.set(cacheKey, tvlAmount);
+      await client.query(
+        `INSERT INTO tvl (realm, value, timestamp) VALUES ($1, $2, NOW())`,
+        [daoGovernanceId, tvlAmount]
+      );
+    } else {
+      console.log("Returning cached TVL value");
+    }
+
+    res.json({ tvl: tvlAmount });
+  } catch (error) {
+    console.error('Error fetching TVL:', error);
+    res.status(500).send('Error fetching TVL');
+  }
+});
+
+
+app.listen(port, () => {
+  console.log(`Example app listening on port ${port}`)
+})
 
 
